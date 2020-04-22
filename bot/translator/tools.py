@@ -6,7 +6,9 @@ def def_to_str(income: list) -> str:
     for item in income:
         ts = f"[[{item['ts']}]] " if 'ts' in item else "" #  Произношение
         pos = f"_{item['pos']}_" if 'pos' in item else "" #  Часть речи
-        out += f"*{item['text']}* {ts}{pos}\n"
+        fl = f"\nФормы: {item['fl']}" if 'fl' in item else "" #  Формы глагола
+
+        out += f"*{item['text']}* {ts}{pos}{fl}\n\n"
 
         for i, text in enumerate(item['tr'], start=1):
             mean = f"({list_join(text['mean'], ',')})" if 'mean' in text else "" # Синонимы

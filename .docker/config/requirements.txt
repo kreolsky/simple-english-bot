@@ -4,3 +4,4 @@ rq
 rq_dashboard
 redis
 pyTelegramBotAPI
+requests
