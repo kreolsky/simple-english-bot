@@ -1,5 +1,8 @@
-.cache/*
+.db/redis/simple-english-bot.rdb
 logs/*
 __pycache__/
 telebot.txt
 bot/settings.py
+bot/trash.py
+bot/local.py
+bot/TODO.me

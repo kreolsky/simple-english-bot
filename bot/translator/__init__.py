@@ -2,92 +2,161 @@ import telebot
 import redis
 import os
 import time
-import pickle
+import datetime
 import random
+import pickle
+import json
 
 from .classes import MessageHandler
 from .classes import Translator
 from .classes import UserStorage
-from .tools import def_to_str, dict_to_str
+from .classes import Logger
+from . import tools
 
 from settings import telebot_token
 from settings import yandex_api_key
+from settings import allow_users
 
 bot = telebot.TeleBot(telebot_token)
-redis_server = redis.Redis(host='redis', db=0)
-# redis_server = redis.Redis(host="127.0.0.1", port=6399, db=0)
+redis_cache_server = redis.Redis(host='redis', db=0)
+redis_log_server = redis.Redis(host='redis', db=15)
 
 parser = MessageHandler()
-dict = Translator(yandex_api_key, redis_server)
+dict = Translator(yandex_api_key, redis_cache_server)
+logger = Logger(redis_log_server)
 
-def translate_and_send(text_to_translate, user_id):
-    out = dict.translate(text_to_translate, ui='ru')['def']
-    result = def_to_str(out) if out else f'"{text_to_translate}" not found'
-    bot.send_message(user_id, result, parse_mode='markdown')
+def translate(word):
+    result = f'"{text_to_translate}" not found'
+    out = dict.translate(text_to_translate, ui='ru')
+    if out['def']:
+        result = tools.def_to_str(out['def'])
 
-@parser.command(['/translate', '/t'])
-def translate_word(message):
-    user_id = str(message['message']['from']['id'])
-    text_to_translate = ' '.join(message['message']['text'].split(' ')[1:])
-    translate_and_send(text_to_translate, user_id)
+    return result
 
-@parser.command(['/add', '/a'])
-def add_to_user_storage(message):
-    user_id = str(message['message']['from']['id'])
-    user_storage = UserStorage(user_id, redis_server)
-    word = ' '.join(message['message']['text'].split(' ')[1:])
-    out = dict.translate(word, ui='ru')['def']
 
-    if out:
-        user_storage.add_to_list(word)
-        message_to_user = f'"{word}" was successfully added'
-    else:
-        message_to_user = f'"{word}" not found'
-
-    bot.send_message(user_id, message_to_user, parse_mode='markdown')
-
-@parser.command(['/del', '/d'])
-def del_from_user_storage(message):
-    user_id = str(message['message']['from']['id'])
-    user_storage = UserStorage(user_id, redis_server)
-    word = ' '.join(message['message']['text'].split(' ')[1:])
-
-    message_to_user = f'"{word}" not in your list'
-    if user_storage.del_from_list(word):
-        message_to_user = f'"{word}" was successfully deleted'
-
-    bot.send_message(user_id, message_to_user, parse_mode='markdown')
-
-@parser.command(['/word', '/w'])
-def get_random_word(message):
-    user_id = str(message['message']['from']['id'])
-    word = ' '.join(message['message']['text'].split(' ')[1:])
-    user_storage = UserStorage(user_id, redis_server)
-
-    user_words_list = user_storage.get_user_words_list()
-    random_word = random.choice(user_words_list)
-    translate_and_send(random_word, user_id)
-
-@parser.command(['/list', '/l'])
-def parse_translate(message):
-    user_id = str(message['message']['from']['id'])
-    user_storage = UserStorage(user_id, redis_server)
-
-    user_words_str = ', '.join(user_storage.get_user_words_list())
-    bot.send_message(user_id, user_words_str, parse_mode='markdown')
-
-@parser.command('/debug')
-def parse_debug(message):
+@parser.command('/about')
+def get_user_info(message):
     user_id = str(message['message']['chat']['id'])
-    message_id = bot.send_message(user_id, dict_to_str(message)).message_id
+    message_id = bot.send_message(user_id, tools.dict_to_str(message)).message_id
     time.sleep(20)
     bot.delete_message(user_id, message_id)
 
+
+@parser.permission(allow_users)
+@parser.command('/debug')
+def drop_log_data_to_file(message):
+    out = {}
+    for key, chunk in logger.get_all_chunks():
+        key = key.decode()
+        out[key] = {k.decode(): pickle.loads(v) for k, v in chunk.items()}
+
+    filename = f'debug-{int(time.time())}.json'
+    with open(filename, 'w') as file:
+        json.dump(out, file, indent=2, ensure_ascii=False)
+
+    user_id = str(message['message']['chat']['id'])
+    bot.send_message(user_id, f'{filename} was saved')
+
+
+# @parser.permission(allow_users)
+# @parser.command('/drop')
+# def drop_log_storage(message):
+#     logger.drop()
+
+
 @parser.command()
-def parse_translate_wo_command(message):
-    user_id = str(message['message']['from']['id'])
-    text_to_translate = message['message']['text']
-    translate_and_send(text_to_translate, user_id)
+def translate_word(message):
+    language_code = message['message']['from']['language_code']
+    user_id = message['message']['from']['id']
+    user_data = message['message']['from']['id']
+    chat_id = message['message']['chat']['id']
+    # text = ' '.join(message['message']['text'].split(' ')[1:])
+    request = message['message']['text']
+    text_to_translate = tools.clear_text(request)
+
+    log_data = {
+        'ts': str(datetime.datetime.now()),
+        'event_name': 'word_translate',
+        'status': '',
+        'user': user_id,
+        'channel': 'telegram',
+        'message': {
+            'request': request,
+            'text_to_translate': text_to_translate,
+            'provider': '',
+            'storage': '',
+            'extra': {
+                'telegram': message['message']
+                }
+            }
+        }
+
+    if text_to_translate:
+        result = dict.translate(text_to_translate, ui='ru')
+        log_data['status'] = result['log']['status']
+        log_data['message']['storage'] = result['log']['storage']
+        log_data['message']['provider'] = result['log']['provider']
+
+        result_def = f'"{text_to_translate}" not found'
+        if result['def']:
+            result_def = tools.def_to_str(result['def'])
+
+        bot.send_message(user_id, result_def, parse_mode='markdown')
+
+    else:
+        log_data['status'] = 'wrong_request'
+
+    logger.add(log_data)
+
+
+# @parser.command(['/add', '/a'])
+# def add_to_user_storage(message):
+#     user_id = str(message['message']['from']['id'])
+#     chat_id = str(message['message']['chat']['id'])
+#     word = ' '.join(message['message']['text'].split(' ')[1:])
+#
+#     user_storage = UserStorage(user_id, redis_cache_server)
+#
+#     out = dict.translate(word, ui='ru')
+#     is_success = 'def' in out and out['def']
+#
+#     if is_success:
+#         user_storage.add_to_list(word)
+#         message_to_user = f'"{word}" was successfully added'
+#     else:
+#         message_to_user = f'"{word}" not found'
+#
+#     bot.send_message(user_id, message_to_user, parse_mode='markdown')
+#
+# @parser.command(['/del', '/d'])
+# def del_from_user_storage(message):
+#     user_id = str(message['message']['from']['id'])
+#     word = ' '.join(message['message']['text'].split(' ')[1:])
+#     user_storage = UserStorage(user_id, redis_cache_server)
+#
+#     message_to_user = f'"{word}" not in your list'
+#     if user_storage.del_from_list(word):
+#         message_to_user = f'"{word}" was successfully deleted'
+#
+#     bot.send_message(user_id, message_to_user, parse_mode='markdown')
+#
+# @parser.command(['/word', '/w'])
+# def get_random_word_from_storage(message):
+#     user_id = str(message['message']['from']['id'])
+#     chat_id = str(message['message']['chat']['id'])
+#     user_storage = UserStorage(user_id, redis_cache_server)
+#
+#     user_words_list = user_storage.get_user_words_list()
+#     random_word = random.choice(user_words_list)
+#     translate_and_send(random_word, user_id, chat_id)
+#
+# @parser.command(['/list', '/l'])
+# def get_user_list(message):
+#     user_id = str(message['message']['from']['id'])
+#     user_storage = UserStorage(user_id, redis_cache_server)
+#
+#     user_words_str = ', '.join(user_storage.get_user_words_list())
+#     bot.send_message(user_id, user_words_str, parse_mode='markdown')
 
 def main(message):
     parser.run(message)

@@ -1,15 +1,18 @@
 import requests
 import redis
-import pickle
 import re
+import uuid
+import time
+import pickle
 
-
+from settings import yandex_not_found_cache_sec
+from settings import log_chunk_size_sec
 # TODO Вынести яндекс переводчик отдельным обьектом для заменяемости
 
 class Translator(object):
-    def __init__(self, yandex_api_key, redis_server):
+    def __init__(self, yandex_api_key, cache_server):
         self._yandex_api_key = yandex_api_key
-        self._redis_server = redis_server
+        self._cache_server = cache_server
 
     def _api(self, params):
         params['key'] = self._yandex_api_key
@@ -19,11 +22,16 @@ class Translator(object):
 
     def _get_from_cache(self, lang, text):
         key = f'{lang}:{text}'
-        return self._redis_server.get(key)
+        return self._cache_server.get(key)
 
-    def _put_to_cache(self, lang, text, article):
+    def _put_to_cache(self, lang, text, article, ttl=None):
+        # ttl -- time to live
+
         key = f'{lang}:{text}'
-        return self._redis_server.set(key, article)
+        self._cache_server.set(key, article)
+
+        if ttl:
+            self._cache_server.expire(key, ttl)
 
     def _yandex_translate(self, text, lang, ui):
         params = {
@@ -36,31 +44,49 @@ class Translator(object):
         out = self._api(params)
         return out
 
-    def _clear_text(self, text):
-        return re.sub('[^A-Za-z]+', ' ', text).strip().lower()
-
     def translate(self, text, lang='en-ru', ui='en'):
-        text = self._clear_text(text)
+        log_data = {
+            'status': 'not_found',
+            'storage': 'cache',
+            'provider': '',
+            }
 
         cache = self._get_from_cache(lang, text)
         if cache:
-            return pickle.loads(cache)
+            out = pickle.loads(cache)
+            if out['def']:
+                log_data['status'] = 'success'
+
+            if 'provider' in out:
+                log_data['provider'] = out['provider']
+
+            out['log'] = log_data
+            return out
 
         out = self._yandex_translate(text, lang, ui)
+        log_data['storage'] = 'internet'
+        log_data['provider'] = 'yandex'
+        out['provider'] = 'yandex' # Добавить в кеш данные откуда взята словарная статья
+
         if out['def']:
             self._put_to_cache(lang, text, pickle.dumps(out))
+            log_data['status'] = 'success'
+        else:
+            self._put_to_cache(lang, text, pickle.dumps(out), ttl=yandex_not_found_cache_sec)
 
+        # Добавить к ответу метадату
+        out['log'] = log_data
         return out
 
 
 class UserStorage(object):
-    def __init__(self, user_id, redis_server):
+    def __init__(self, user_id, cache_server):
         self._user_key = f'user:{user_id}'
-        self._redis_server = redis_server
+        self._cache_server = cache_server
 
     def get_user_words_list(self, group='base'):
         user_key = f'{self._user_key}:{group}'.encode()
-        user_words_list = self._redis_server.get(user_key) or pickle.dumps(['hello'])
+        user_words_list = self._cache_server.get(user_key) or pickle.dumps(['hello'])
 
         return pickle.loads(user_words_list)
 
@@ -68,7 +94,7 @@ class UserStorage(object):
         user_key = f'{self._user_key}:{group}'.encode()
         user_words_list = pickle.dumps(user_words_list)
 
-        self._redis_server.set(user_key, user_words_list)
+        self._cache_server.set(user_key, user_words_list)
         return True
 
     def add_to_list(self, word, group='base'):
@@ -126,3 +152,29 @@ class MessageHandler():
             if command and permission:
                 func(message)
                 break
+
+
+class Logger():
+    def __init__(self, log_server, chunk_size=log_chunk_size_sec):
+        self._log_server = log_server
+        self._chunk_size = chunk_size
+
+    def set_chunk_size(self, chunk_size):
+        self._chunk_size = chunk_size
+
+    def add(self, log_data):
+        chunk_name = int(time.time() // self._chunk_size * self._chunk_size)
+        key = str(uuid.uuid4())
+        value = pickle.dumps(log_data)
+
+        self._log_server.hset(chunk_name, key, value)
+
+    def get_all_chunks(self):
+        keys = self._log_server.keys()
+        for key in keys:
+            yield key, self._log_server.hgetall(key)
+
+    def drop(self):
+        keys = self._log_server.keys()
+        for key in keys:
+            self._log_server.delete(key)

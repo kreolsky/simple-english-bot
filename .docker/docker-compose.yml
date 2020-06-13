@@ -52,8 +52,9 @@ services:
     container_name: simple-english-redis
     command: redis-server /usr/local/etc/redis/redis.conf
     restart: always
-    # ports:
-    #   - 6399:6379
     volumes:
       - ./redis/redis.conf:/usr/local/etc/redis/redis.conf
-      - ./../.cache/:/data/
+      - ./../.db/redis/:/data/
+
+    # ports:
+    #   - 6399:6379

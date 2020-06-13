@@ -25,7 +25,6 @@ def bot_request(request, queue, parser):
         message = request.get_json()
         # Складываем обработку запроса и его выполнение в очередь
         queue.enqueue(parser, message)
-
         return 'OK'
 
     return abort(404)
