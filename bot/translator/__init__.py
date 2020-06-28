@@ -1,11 +1,12 @@
-import telebot
-import redis
 import os
 import time
 import datetime
 import random
 import pickle
 import json
+
+from redis import Redis
+from telebot import TeleBot
 
 from .classes import MessageHandler
 from .classes import Translator
@@ -17,21 +18,12 @@ from settings import telebot_token
 from settings import yandex_api_key
 from settings import allow_users
 
-bot = telebot.TeleBot(telebot_token)
-redis_cache_server = redis.Redis(host='redis', db=0)
-redis_log_server = redis.Redis(host='redis', db=15)
-
+bot = TeleBot(telebot_token)
+redis_cache_server = Redis(host='redis', db=0)
+redis_log_server = Redis(host='redis', db=15)
 parser = MessageHandler()
-dict = Translator(yandex_api_key, redis_cache_server)
+translator = Translator(yandex_api_key, redis_cache_server)
 logger = Logger(redis_log_server)
-
-def translate(word):
-    result = f'"{text_to_translate}" not found'
-    out = dict.translate(text_to_translate, ui='ru')
-    if out['def']:
-        result = tools.def_to_str(out['def'])
-
-    return result
 
 
 @parser.command('/about')
@@ -44,7 +36,7 @@ def get_user_info(message):
 
 @parser.permission(allow_users)
 @parser.command('/debug')
-def drop_log_data_to_file(message):
+def save_logs_to_file(message):
     out = {}
     for key, chunk in logger.get_all_chunks():
         key = key.decode()
@@ -66,11 +58,8 @@ def drop_log_data_to_file(message):
 
 @parser.command()
 def translate_word(message):
-    language_code = message['message']['from']['language_code']
     user_id = message['message']['from']['id']
-    user_data = message['message']['from']['id']
     chat_id = message['message']['chat']['id']
-    # text = ' '.join(message['message']['text'].split(' ')[1:])
     request = message['message']['text']
     text_to_translate = tools.clear_text(request)
 
@@ -92,7 +81,7 @@ def translate_word(message):
         }
 
     if text_to_translate:
-        result = dict.translate(text_to_translate, ui='ru')
+        result = translator.translate(text_to_translate, ui='ru')
         log_data['status'] = result['log']['status']
         log_data['message']['storage'] = result['log']['storage']
         log_data['message']['provider'] = result['log']['provider']
@@ -101,7 +90,7 @@ def translate_word(message):
         if result['def']:
             result_def = tools.def_to_str(result['def'])
 
-        bot.send_message(user_id, result_def, parse_mode='markdown')
+        bot.send_message(chat_id, result_def, parse_mode='markdown')
 
     else:
         log_data['status'] = 'wrong_request'
@@ -117,7 +106,7 @@ def translate_word(message):
 #
 #     user_storage = UserStorage(user_id, redis_cache_server)
 #
-#     out = dict.translate(word, ui='ru')
+#     out = translator.translate(word, ui='ru')
 #     is_success = 'def' in out and out['def']
 #
 #     if is_success:
