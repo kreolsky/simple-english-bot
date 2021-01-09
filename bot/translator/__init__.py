@@ -18,9 +18,10 @@ from settings import telebot_token
 from settings import yandex_api_key
 from settings import allow_users
 
-bot = TeleBot(telebot_token)
 redis_cache_server = Redis(host='redis', db=0)
 redis_log_server = Redis(host='redis', db=15)
+
+bot = TeleBot(telebot_token)
 parser = MessageHandler()
 translator = Translator(yandex_api_key, redis_cache_server)
 logger = Logger(redis_log_server)
