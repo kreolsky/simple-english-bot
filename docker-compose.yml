@@ -1,0 +1,60 @@
+version: '3.7'
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: simple-english-bot
+    container_name: simple-english-bot
+    restart: always
+    ports:
+      - 2990:80
+    volumes:
+      - ./src/:/home/bot/
+      - ./logs/:/home/logs/
+    tty: true
+    depends_on:
+     - redis
+
+  worker_1:
+    image: simple-english-bot
+    container_name: simple-english-worker_1
+    command: rq worker bot --url redis://redis
+    restart: always
+    volumes:
+     - ./src/:/home/bot/
+    depends_on:
+     - redis
+
+  worker_2:
+    image: simple-english-bot
+    container_name: simple-english-worker_2
+    command: rq worker bot --url redis://redis
+    restart: always
+    volumes:
+     - ./src/:/home/bot/
+    depends_on:
+     - redis
+
+  worker_3:
+    image: simple-english-bot
+    container_name: simple-english-worker_3
+    command: rq worker bot --url redis://redis
+    restart: always
+    volumes:
+     - ./src/:/home/bot/
+    depends_on:
+     - redis
+
+  redis:
+    image: redis:6-alpine
+    container_name: simple-english-redis
+    command: redis-server /usr/local/etc/redis/redis.conf
+    restart: always
+    volumes:
+      - ./etc/redis/redis.conf:/usr/local/etc/redis/redis.conf
+      - ./db/redis/:/data/
+
+    ports:
+      - 6399:6379

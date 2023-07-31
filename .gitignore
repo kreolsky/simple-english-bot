@@ -1,0 +1,9 @@
+.DS_Store
+simple-english-bot.rdb
+logs/*
+__pycache__/
+telebot.txt
+settings.py
+trash.py
+local.py
+TODO.me
